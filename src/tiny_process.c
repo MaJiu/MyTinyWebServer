@@ -1,3 +1,6 @@
+/*
+ * 使用进程实现并发
+ */
 #include "csapp.h"
 
 void do_http(int cfd);
@@ -40,7 +43,15 @@ int main(int argc, char **argv)
         Getnameinfo((SA*)&clientaddr, clientlen, hostname, MAXLINE, 
                 port, MAXLINE, NI_NUMERICHOST | NI_NUMERICSERV);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
-        do_http(connfd);
+        if (Fork() == 0) {
+            if (signal(SIGCHLD, reap_handler) == SIG_ERR)
+                unix_error("signal error");
+            Close(listenfd); // 在进行服务的子进程关闭监听Socket描述符
+            printf("Worker: %d\n", getpid());
+            do_http(connfd);
+            Close(connfd);
+            exit(0);
+        }
         Close(connfd);
         printf("-----------End------------\n");
     }
@@ -49,7 +60,7 @@ int main(int argc, char **argv)
  * 处理HTTP事务
  * 参数: 建立连接的文件描述符
  */
-void do_http(int cfd) 
+void do_http(int cfd)   
 {
     rio_t rio; //RIO包的缓冲区
     Rio_readinitb(&rio, cfd);
@@ -192,6 +203,7 @@ void serve_dynamic(int fd, const char *filename, const char *cgiargs)
 
     if (Fork() == 0) {
         setenv("QUERY_STRING", cgiargs, 1);
+        printf("CGI: %d\n", getpid());
         Dup2(fd, STDOUT_FILENO);
         char *emptylist[] = {NULL};
         Execve(filename, emptylist, environ);
@@ -204,8 +216,12 @@ void serve_dynamic(int fd, const char *filename, const char *cgiargs)
 void reap_handler(int sig)
 {
     int olderrno = errno; //保存旧的的errno
-    while (waitpid(-1, NULL, 0) > 0) {
-        Sio_puts("reaped a chiled!\n");
+    int child;
+    while ((child = waitpid(-1, NULL, 0)) > 0) {
+        char pid[MAXLINE];
+        sprintf(pid, "%d\n", child);
+        Sio_puts("reaped a chiled! ");
+        Sio_puts(pid);
     }
     if (errno != ECHILD)
         sio_error("waitpid error!\n");
@@ -234,4 +250,4 @@ void clienterror(int fd, const char *cause, const char *errnum, \
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "<hr><em>The Tiny Web server</em>\r\n");
     Rio_writen(fd, buf, strlen(buf));
-}
+}  

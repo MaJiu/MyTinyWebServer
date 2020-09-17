@@ -1,6 +1,6 @@
 #include "csapp.h"
 
-void do_http(int cfd);
+void *do_http(void *vargp);
 void do_get(int fd, int is_static, const char *filenaem, const char *cgiargs);
 void serve_static(int fd, const char *filename, int filesize);
 void serve_dynamic(int fd, const char *filename, const char *cgiargs);
@@ -27,34 +27,40 @@ int main(int argc, char **argv)
     if (signal(SIGCHLD, reap_handler) == SIG_ERR)
         unix_error("signal error");
     int listenfd = Open_listenfd(argv[1]);
-    int connfd;
+    int *connfdp;
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
     char hostname[MAXLINE], port[MAXLINE];
+    pthread_t tid;
     printf("TinyWebServer is working!\n");
 
     while (1) {
         printf("----------Begin-----------\n");
         clientlen = sizeof(clientaddr);
-        connfd = Accept(listenfd, (SA*)&clientaddr, &clientlen);
+        connfdp = Malloc(sizeof(int)); // 这里一定要使用malloc在堆上分配内存, 避免race 冒险
+        *connfdp = Accept(listenfd, (SA*)&clientaddr, &clientlen);
         Getnameinfo((SA*)&clientaddr, clientlen, hostname, MAXLINE, 
                 port, MAXLINE, NI_NUMERICHOST | NI_NUMERICSERV);
         printf("Accepted connection from (%s, %s)\n", hostname, port);
-        do_http(connfd);
-        Close(connfd);
+        Pthread_create(&tid, NULL, do_http, connfdp);
         printf("-----------End------------\n");
     }
 }
 /*
+ * 线程例程 thread routine
  * 处理HTTP事务
- * 参数: 建立连接的文件描述符
+ * 参数: 指向建立连接的文件描述符的指针
+ * 注意: vargp指向的内存区域是malloc的, 切记要free, 连接描述符也要记得关闭
  */
-void do_http(int cfd) 
+void* do_http(void *vargp)
 {
+    int cfd = *((int*)vargp);
+    Free(vargp); // 注意
+    Pthread_detach(pthread_self());
     rio_t rio; //RIO包的缓冲区
     Rio_readinitb(&rio, cfd);
     char buff[MAXLINE];
-    if (Rio_readlineb(&rio, buff, MAXLINE) == 0) return;
+    if (Rio_readlineb(&rio, buff, MAXLINE) == 0) return NULL;
     printf("%s", buff); //打印请求行
     char method[MAXLINE], url[MAXLINE], version[MAXLINE];
     sscanf(buff, "%s %s %s", method, url, version);
@@ -66,6 +72,8 @@ void do_http(int cfd)
     else clienterror(cfd, method, "501", 
             "Not Implemented",
             "TinyWebServer does not implement this method!");
+    Close(cfd);
+    return NULL;
 }
 
 /*
